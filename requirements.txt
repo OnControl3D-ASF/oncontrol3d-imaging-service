@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+python-multipart
+requests
+numpy
+scipy
+scikit-image
+SimpleITK
+pydantic-settings

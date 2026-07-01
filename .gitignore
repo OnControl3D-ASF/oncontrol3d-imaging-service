@@ -1,0 +1,11 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Runtime data (raw DICOM + derived volumes are regenerated / uploaded separately)
+storage/
+
+# Local env (use .env.example as the template)
+.env
