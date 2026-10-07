@@ -2,7 +2,9 @@ from pathlib import Path
 import shutil
 import urllib.parse
 
-from fastapi import FastAPI, HTTPException, Query
+from typing import Annotated
+
+from fastapi import FastAPI, HTTPException, Path as PathParam, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
@@ -30,6 +32,16 @@ app.add_middleware(
 )
 
 
+# Orthanc study IDs are SHA-1 based: five groups of 8 hex chars joined by "-".
+# Validating them up front keeps user input from ever reaching the filesystem.
+ORTHANC_ID_PATTERN = r"^[0-9a-f]{8}(-[0-9a-f]{8}){4}$"
+
+StudyId = Annotated[
+    str,
+    PathParam(pattern=ORTHANC_ID_PATTERN, description="ID de estudio en Orthanc."),
+]
+
+
 def get_storage_paths(orthanc_study_id: str) -> dict:
     base = Path(settings.storage_dir)
 
@@ -53,7 +65,7 @@ def health():
 
 
 @app.get("/orthanc/studies/{orthanc_study_id}")
-def orthanc_study_info(orthanc_study_id: str):
+def orthanc_study_info(orthanc_study_id: StudyId):
     try:
         return get_study_metadata(orthanc_study_id)
     except ValueError as exc:
@@ -64,7 +76,7 @@ def orthanc_study_info(orthanc_study_id: str):
 
 @app.post("/studies/{orthanc_study_id}/segment-lungs")
 def segment_lungs(
-    orthanc_study_id: str,
+    orthanc_study_id: StudyId,
     threshold_hu: int = Query(
     -400,
     description="Umbral HU para segmentación pulmonar. Prueba -500, -450, -400 o -350.",
@@ -143,7 +155,7 @@ def segment_lungs(
 
 
 @app.get("/studies/{orthanc_study_id}/derived/lung-volume")
-def get_lung_volume(orthanc_study_id: str):
+def get_lung_volume(orthanc_study_id: StudyId):
     paths = get_storage_paths(orthanc_study_id)
 
     if not paths["lung_path"].exists():
@@ -160,7 +172,7 @@ def get_lung_volume(orthanc_study_id: str):
 
 
 @app.get("/studies/{orthanc_study_id}/derived/lung-mask")
-def get_lung_mask(orthanc_study_id: str):
+def get_lung_mask(orthanc_study_id: StudyId):
     paths = get_storage_paths(orthanc_study_id)
 
     if not paths["mask_path"].exists():
@@ -177,7 +189,7 @@ def get_lung_mask(orthanc_study_id: str):
 
 
 @app.get("/studies/{orthanc_study_id}/derived/lung-highlighted")
-def get_lung_highlighted(orthanc_study_id: str):
+def get_lung_highlighted(orthanc_study_id: StudyId):
     paths = get_storage_paths(orthanc_study_id)
 
     if not paths["highlight_path"].exists():
@@ -194,7 +206,7 @@ def get_lung_highlighted(orthanc_study_id: str):
 
 
 @app.get("/studies/{orthanc_study_id}/viewer-url")
-def get_volview_url(orthanc_study_id: str):
+def get_volview_url(orthanc_study_id: StudyId):
     paths = get_storage_paths(orthanc_study_id)
 
     if not paths["lung_path"].exists():
