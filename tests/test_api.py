@@ -53,7 +53,8 @@ class TestSegmentLungs:
         assert response.status_code == 200
         assert body["alreadyProcessed"] is False
         assert body["metrics"]["denseRegionCount"] == 1
-        assert body["highlightVolumeUrl"].endswith(f"/studies/{VALID_STUDY_ID}/derived/lung-highlighted")
+        expected = f"/studies/{VALID_STUDY_ID}/derived/lung-highlighted"
+        assert body["highlightVolumeUrl"].endswith(expected)
         assert "lung_highlighted.mha" in body["volviewUrl"]
         assert (storage / "derived" / VALID_STUDY_ID / "lung_only.mha").exists()
 

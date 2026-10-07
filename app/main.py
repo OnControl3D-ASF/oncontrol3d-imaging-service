@@ -1,21 +1,21 @@
-from pathlib import Path
 import shutil
 import urllib.parse
-
+from pathlib import Path
 from typing import Annotated
 
-from fastapi import FastAPI, HTTPException, Path as PathParam, Query
+from fastapi import FastAPI, HTTPException, Query
+from fastapi import Path as PathParam
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from app.config import settings
-from app.orthanc_client import download_study_archive, get_study_metadata
 from app.lung_segmentation import (
-    unzip_archive,
-    read_largest_dicom_series,
     create_lung_only_volume,
+    read_largest_dicom_series,
     save_images,
+    unzip_archive,
 )
+from app.orthanc_client import download_study_archive, get_study_metadata
 
 app = FastAPI(
     title="OnControl Imaging Service",
@@ -69,9 +69,9 @@ def orthanc_study_info(orthanc_study_id: StudyId):
     try:
         return get_study_metadata(orthanc_study_id)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Error consultando Orthanc: {exc}")
+        raise HTTPException(status_code=502, detail=f"Error consultando Orthanc: {exc}") from exc
 
 
 @app.post("/studies/{orthanc_study_id}/segment-lungs")
@@ -83,7 +83,8 @@ def segment_lungs(
     ),
     border_erosion_radius: int = Query(
         1,
-        description="Cantidad de borde pulmonar a erosionar. 0=no erosiona, 1=suave, 2=moderado, 3=agresivo.",
+        description="Cantidad de borde pulmonar a erosionar. "
+        "0=no erosiona, 1=suave, 2=moderado, 3=agresivo.",
     ),
     force: bool = Query(
         False,
@@ -149,9 +150,9 @@ def segment_lungs(
         return response
 
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Error segmentando pulmones: {exc}")
+        raise HTTPException(status_code=500, detail=f"Error segmentando pulmones: {exc}") from exc
 
 
 @app.get("/studies/{orthanc_study_id}/derived/lung-volume")
