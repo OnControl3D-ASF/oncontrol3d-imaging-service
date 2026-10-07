@@ -1,6 +1,7 @@
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+filterwarnings = ["error::FutureWarning"]
 
 [tool.coverage.run]
 source = ["app"]
