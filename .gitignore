@@ -16,3 +16,4 @@ coverage.xml
 htmlcov/
 .pytest_cache/
 .ruff_cache/
+test-results.xml
