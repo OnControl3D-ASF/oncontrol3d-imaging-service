@@ -133,6 +133,15 @@ class TestCreateLungOnlyVolume:
 
         assert (sitk.GetArrayFromImage(highlight_image)[nodule] == 1500).all()
 
+    def test_maps_display_volume_to_visible_range(self, result):
+        _, mask_image, highlight_image, _ = result
+        mask = sitk.GetArrayFromImage(mask_image).astype(bool)
+        highlighted = sitk.GetArrayFromImage(highlight_image)
+
+        assert (highlighted[~mask] == -3024).all()
+        assert highlighted[mask].min() >= 145
+        assert highlighted[mask].max() <= 1500
+
     def test_preserves_spatial_metadata(self, result):
         for image in result[:3]:
             assert image.GetSpacing() == pytest.approx(SPACING_XYZ)
@@ -150,6 +159,15 @@ class TestCreateLungOnlyVolume:
 
 
 class TestSaveImages:
+    def test_keeps_full_resolution_by_default(self, tmp_path):
+        hu, _, _ = build_chest_phantom()
+        lung, mask, highlight, _ = create_lung_only_volume(to_image(hu))
+
+        paths = save_images(lung, mask, tmp_path, highlight_image=highlight)
+
+        saved = sitk.ReadImage(str(paths["highlightVolumePath"]))
+        assert saved.GetSize() == (96, 96, 20)
+
     def test_writes_shrunk_compressed_volumes(self, tmp_path):
         hu, _, _ = build_chest_phantom()
         lung, mask, highlight, _ = create_lung_only_volume(to_image(hu))
