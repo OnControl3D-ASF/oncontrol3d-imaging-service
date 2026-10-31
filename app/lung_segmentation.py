@@ -79,7 +79,7 @@ def keep_lung_regions_per_slice(binary_volume: np.ndarray) -> np.ndarray:
         slice_mask = clear_border(slice_mask)
 
         # Quita ruido pequeño.
-        slice_mask = morphology.remove_small_objects(slice_mask, min_size=80)
+        slice_mask = morphology.remove_small_objects(slice_mask, max_size=79)
 
         labels = measure.label(slice_mask)
         regions = measure.regionprops(labels)
@@ -132,10 +132,10 @@ def segment_lung_mask(
     mask = keep_lung_regions_per_slice(binary)
 
     # Suaviza y une pequeñas discontinuidades.
-    mask = morphology.binary_closing(mask, morphology.ball(2))
+    mask = morphology.closing(mask, morphology.ball(2))
 
     # Elimina componentes 3D pequeñas.
-    mask = morphology.remove_small_objects(mask, min_size=5000)
+    mask = morphology.remove_small_objects(mask, max_size=4999)
 
     # Rellena huecos dentro del pulmón por corte.
     # Esto ayuda a conservar vasos/arterias dentro de la región pulmonar.
@@ -148,13 +148,13 @@ def segment_lung_mask(
     # Come un poco el borde externo para quitar la "capa" alrededor del pulmón.
     # Esto debe hacerse después del fill_holes para no perder arterias internas.
     if border_erosion_radius > 0:
-        mask = morphology.binary_erosion(
+        mask = morphology.erosion(
             mask,
             morphology.ball(border_erosion_radius)
         )
 
     # Limpieza final por si la erosión dejó fragmentos pequeños.
-    mask = morphology.remove_small_objects(mask, min_size=3000)
+    mask = morphology.remove_small_objects(mask, max_size=2999)
 
     return mask.astype(bool)
 
@@ -172,7 +172,7 @@ def segment_dense_regions(
     también resalta vasos. Sirve para dirigir la mirada a zonas de interés.
     """
     dense = lung_mask & (hu_volume > dense_threshold_hu)
-    dense = morphology.remove_small_objects(dense, min_size=min_size)
+    dense = morphology.remove_small_objects(dense, max_size=min_size - 1)
     return dense.astype(bool)
 
 
@@ -209,8 +209,16 @@ def create_lung_only_volume(
     # Zonas densas dentro del pulmón (referencial).
     dense = segment_dense_regions(hu, mask, dense_threshold_hu=dense_threshold_hu)
 
-    # Volumen resaltado: pulmón normal + zonas densas empujadas a intensidad alta.
-    lung_highlighted = lung_only.copy()
+    # VolView applies CT-AAA to MHA files. Native lung HU values are nearly
+    # transparent with that preset, so map only the display volume into its
+    # visible range while preserving relative density and internal detail.
+    lung_highlighted = np.full_like(hu, fill_value=-3024, dtype=np.int16)
+    visible_lung = np.interp(
+        np.clip(hu[mask], -1000, dense_threshold_hu),
+        (-1000, dense_threshold_hu),
+        (145, 420),
+    ).astype(np.int16)
+    lung_highlighted[mask] = visible_lung
     lung_highlighted[dense] = highlight_value
 
     lung_image = sitk.GetImageFromArray(lung_only)
@@ -251,7 +259,7 @@ def save_images(
     mask_image: sitk.Image,
     output_dir: Path,
     highlight_image: sitk.Image | None = None,
-    viewer_shrink: int = 2,
+    viewer_shrink: int = 1,
 ) -> dict:
     """
     Guarda los volúmenes derivados.
@@ -261,7 +269,7 @@ def save_images(
     (la segmentación ya se hizo a resolución completa, así que la calidad de
     la máscara no cambia). Reduce enormemente el tamaño de descarga y acelera
     el render en VolView, que es referencial y no diagnóstico.
-    1 = sin submuestreo, 2 = ~8x menos vóxeles (recomendado), 3+ = más agresivo.
+    1 = resolución completa (mejor calidad), 2 = ~8x menos vóxeles, 3+ = más agresivo.
 
     Además comprime el .mha (ITK/VolView lo leen de forma transparente).
     """
