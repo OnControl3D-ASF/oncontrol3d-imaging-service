@@ -1,4 +1,5 @@
 from pathlib import Path
+
 import requests
 
 from app.config import settings
