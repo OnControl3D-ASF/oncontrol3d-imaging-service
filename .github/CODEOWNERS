@@ -1,5 +1,6 @@
 # Code owners: the branch protection of `main` requires an approval from one of them.
-# At least two owners per path, so an author who is also an owner can still get a review.
+# Team decision: every member of the OnControl3D-ASF organization is an owner, so any teammate
+# can review; GitHub still prevents authors from approving their own pull requests.
 # Docs: https://docs.github.com/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
 
-*  @MQRF123 @AndreVMG
+*  @AndreVMG @dsorianom @Elcrackje @FabianTG25 @MQRF123 @OutBreakAZL @sephi-dev05
