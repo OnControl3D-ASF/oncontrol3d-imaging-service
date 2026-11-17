@@ -1,0 +1,34 @@
+name: SAST
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+permissions:
+  contents: read
+
+jobs:
+  semgrep:
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep@sha256:c8f333ab0ad103d2bcd3b55cbeabcfc556bfeaa7446ba18594a4320f3807ffc9
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Semgrep scan
+        run: >
+          semgrep scan
+          --config p/python
+          --metrics=off
+          --error
+          --json --output semgrep.json
+          .
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: semgrep-report
+          path: semgrep.json
