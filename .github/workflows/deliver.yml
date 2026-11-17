@@ -1,0 +1,150 @@
+name: Deliver
+
+# Reusable delivery of an already built and scanned image to one environment:
+#   load image artifact -> read IaC outputs -> push to ACR (SemVer + sha tags) ->
+#   render manifests with the image DIGEST -> kubectl apply -> rollout -> smoke test
+#   (automatic rollback if the rollout or the smoke test fails).
+# Called by cicd.yml once per environment with the SAME artifact (build once, promote).
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: GitHub environment (dev | prod)
+        type: string
+        required: true
+      image-tags:
+        description: Space-separated tags to push (e.g. "sha-1a2b3c4" or "1.0.0 1.0 sha-1a2b3c4")
+        type: string
+        required: true
+      app-version:
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  REPOSITORY: oncontrol3d/imaging
+  DEPLOYMENT: imaging
+
+jobs:
+  deliver:
+    name: Deliver to ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: imaging-image
+
+      - name: Load image
+        run: docker load --input imaging-image.tar
+
+      - uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # Single source of truth: outputs of the latest successful IaC deployment in this
+      # environment's resource group (oncontrol3d-infra, bicep/main.bicep).
+      - name: Read infrastructure outputs
+        id: infra
+        env:
+          RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+        run: |
+          az deployment group list -g "$RESOURCE_GROUP" \
+            --query "sort_by([?starts_with(name,'iac-') && properties.provisioningState=='Succeeded'], &properties.timestamp)[-1].properties.outputs" \
+            -o json > outputs.json
+          python3 - <<'EOF'
+          import json, os
+          raw = json.load(open("outputs.json")) or {}
+          out = {k: v["value"] for k, v in raw.items()}
+          keys = {"acr": "acrLoginServer", "aks": "aksName"}
+          values = {name: out.get(key, "") for name, key in keys.items()}
+          ready = all(values.values())
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"ready={'true' if ready else 'false'}\n")
+              for name, value in values.items():
+                  f.write(f"{name}={value}\n")
+          if not ready:
+              missing = [keys[n] for n, v in values.items() if not v]
+              print(f"::warning::{os.environ['RESOURCE_GROUP']} has no complete IaC deployment (missing: {', '.join(missing)}). "
+                    "Deploy the infrastructure first (oncontrol3d-infra, IaC workflow). Delivery skipped.")
+          EOF
+
+      - name: Push image to ACR
+        id: push
+        if: steps.infra.outputs.ready == 'true'
+        env:
+          ACR: ${{ steps.infra.outputs.acr }}
+          TAGS: ${{ inputs.image-tags }}
+        run: |
+          az acr login --name "${ACR%%.*}"
+          for tag in $TAGS; do
+            docker tag imaging:ci "$ACR/$REPOSITORY:$tag"
+            docker push "$ACR/$REPOSITORY:$tag"
+          done
+          digest=$(docker inspect --format '{{index .RepoDigests 0}}' "$ACR/$REPOSITORY:${TAGS%% *}")
+          echo "image=$digest" >> "$GITHUB_OUTPUT"
+          echo "Pushed $digest (tags: $TAGS)"
+
+      - uses: azure/use-kubelogin@v1
+        if: steps.infra.outputs.ready == 'true'
+        with:
+          kubelogin-version: v0.2.22
+
+      - name: Connect to AKS (Entra ID)
+        if: steps.infra.outputs.ready == 'true'
+        run: |
+          az aks get-credentials -g "${{ vars.AZURE_RESOURCE_GROUP }}" -n "${{ steps.infra.outputs.aks }}" --overwrite-existing
+          kubelogin convert-kubeconfig -l azurecli
+
+      - name: Render and apply manifests
+        id: apply
+        if: steps.infra.outputs.ready == 'true'
+        env:
+          IMAGE: ${{ steps.push.outputs.image }}
+          APP_VERSION: ${{ inputs.app-version }}
+        run: |
+          deploy/render.sh "${{ inputs.environment }}" > rendered.yaml
+          kubectl apply -f rendered.yaml
+
+      - name: Wait for rollout (readiness probes)
+        if: steps.infra.outputs.ready == 'true'
+        run: kubectl -n oncontrol rollout status "deployment/$DEPLOYMENT" --timeout=420s
+
+      - name: Smoke test
+        if: steps.infra.outputs.ready == 'true'
+        run: |
+          body=$(kubectl -n oncontrol exec "deploy/$DEPLOYMENT" -- python -c \
+            "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=5).read().decode())")
+          echo "health: $body"
+          echo "$body" | grep -q '"status":"ok"'
+
+      - name: Roll back on failure
+        if: failure() && steps.apply.outcome == 'success'
+        run: |
+          echo "::error::Delivery to ${{ inputs.environment }} failed: rolling back to the previous revision."
+          kubectl -n oncontrol rollout undo "deployment/$DEPLOYMENT"
+          kubectl -n oncontrol rollout status "deployment/$DEPLOYMENT" --timeout=300s || true
+
+      - name: Delivery summary
+        if: steps.infra.outputs.ready == 'true'
+        run: |
+          {
+            echo "### Imaging Service delivered to \`${{ inputs.environment }}\`"
+            echo "- Version: \`${{ inputs.app-version }}\`"
+            echo "- Image: \`${{ steps.push.outputs.image }}\`"
+            echo "- Tags: \`${{ inputs.image-tags }}\`"
+            echo "- Pods:"
+            kubectl -n oncontrol get pods -l "app.kubernetes.io/name=$DEPLOYMENT" \
+              -o custom-columns=NAME:.metadata.name,READY:.status.containerStatuses[0].ready,IMAGE:.spec.containers[0].image --no-headers \
+              | sed 's/^/  - /'
+          } >> "$GITHUB_STEP_SUMMARY"
