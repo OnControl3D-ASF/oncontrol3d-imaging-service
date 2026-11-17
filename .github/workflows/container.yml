@@ -1,0 +1,61 @@
+name: Container scan
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  schedule:
+    - cron: "0 7 * * 1" # new vulnerabilities can appear without code changes
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: oncontrol3d-imaging-service:scan
+  TRIVY_IMAGE: aquasec/trivy@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c
+
+jobs:
+  trivy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build image
+        run: |
+          docker build --pull -t "$IMAGE" .
+          docker save -o image.tar "$IMAGE"
+
+      - name: Generate full report
+        run: >
+          docker run --rm
+          -v "$GITHUB_WORKSPACE:/src"
+          -v trivy-cache:/root/.cache
+          -w /src
+          "$TRIVY_IMAGE"
+          image --input image.tar --scanners vuln --offline-scan --format json --output trivy-image.json
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: trivy-image-report
+          path: trivy-image.json
+
+      - name: Fail on fixable HIGH or CRITICAL vulnerabilities
+        run: >
+          docker run --rm
+          -v "$GITHUB_WORKSPACE:/src"
+          -v trivy-cache:/root/.cache
+          -w /src
+          "$TRIVY_IMAGE"
+          image --input image.tar --scanners vuln --offline-scan --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1
+
+      - name: Fail on HIGH or CRITICAL Dockerfile issues
+        run: >
+          docker run --rm
+          -v "$GITHUB_WORKSPACE:/src:ro"
+          -v trivy-cache:/root/.cache
+          -w /src
+          "$TRIVY_IMAGE"
+          config Dockerfile --severity HIGH,CRITICAL --exit-code 1
