@@ -30,9 +30,11 @@ RUN python -m venv /opt/venv \
 # ---------- Stage 2: runtime ----------
 FROM ${PYTHON_IMAGE} AS runtime
 
-# Runtime libs needed by scipy / scikit-image / SimpleITK wheels.
-# The base interpreter's pip/setuptools/wheel are removed for the same reason.
+# Apply pending Debian security updates (the upstream base tag can lag behind
+# published fixes), then add runtime libs needed by scipy / scikit-image /
+# SimpleITK wheels. The base interpreter's pip/setuptools/wheel are removed too.
 RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
     && apt-get install -y --no-install-recommends libgomp1 \
     && rm -rf /var/lib/apt/lists/* \
     && python -m pip uninstall -y pip setuptools wheel \
