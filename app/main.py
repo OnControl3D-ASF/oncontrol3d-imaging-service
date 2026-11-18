@@ -15,6 +15,7 @@ from app.lung_segmentation import (
     save_images,
     unzip_archive,
 )
+from app.lung_surface import write_surface_stl
 from app.orthanc_client import download_study_archive, get_study_metadata
 
 app = FastAPI(
@@ -217,6 +218,28 @@ def get_volview_url(orthanc_study_id: StudyId):
         )
 
     return build_segmentation_response(orthanc_study_id, already_processed=True)
+
+
+@app.get("/studies/{orthanc_study_id}/derived/lung-surface")
+def get_lung_surface(orthanc_study_id: StudyId):
+    paths = get_storage_paths(orthanc_study_id)
+    surface_path = paths["derived_dir"] / "lung_surface_v1.stl"
+    if not surface_path.exists():
+        if not paths["unzip_dir"].is_dir():
+            raise HTTPException(
+                status_code=409,
+                detail="Faltan los DICOM originales. Ejecuta primero /segment-lungs.",
+            )
+        try:
+            image, _ = read_largest_dicom_series(paths["unzip_dir"])
+            write_surface_stl(image, surface_path)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500, detail="No se pudo crear el modelo sólido."
+            ) from exc
+    return FileResponse(surface_path, media_type="model/stl", filename="lung_surface.stl")
 
 
 def build_segmentation_response(orthanc_study_id: str, already_processed: bool):
