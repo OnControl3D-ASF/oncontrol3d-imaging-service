@@ -59,6 +59,22 @@ class TestSegmentLungs:
         assert "lung-highlighted?v=" in body["volviewUrl"]
         assert (storage / "derived" / VALID_STUDY_ID / "lung_only.mha").exists()
 
+    def test_same_origin_paths_stay_relative_for_any_public_host(
+        self, client, fake_orthanc, monkeypatch
+    ):
+        # AKS sets PUBLIC_BASE_URL=/imaging and VOLVIEW_URL=/volview/index.html so the
+        # browser resolves every link against whatever host serves the app.
+        monkeypatch.setattr(main.settings, "public_base_url", "/imaging")
+        monkeypatch.setattr(main.settings, "volview_url", "/volview/index.html")
+
+        body = client.post(SEGMENT_URL).json()
+
+        base = f"/imaging/studies/{VALID_STUDY_ID}/derived"
+        assert body["lungVolumeUrl"] == f"{base}/lung-volume"
+        assert body["volviewUrl"].startswith("/volview/index.html?names=[")
+        assert f"&urls=[{base}/lung-highlighted?v=" in body["volviewUrl"]
+        assert "svc.cluster.local" not in body["volviewUrl"]
+
     def test_reuses_cached_volume_without_calling_orthanc(self, client, fake_orthanc):
         client.post(SEGMENT_URL)
         response = client.post(SEGMENT_URL)
