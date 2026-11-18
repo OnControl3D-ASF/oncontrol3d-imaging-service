@@ -56,6 +56,7 @@ class TestSegmentLungs:
         expected = f"/studies/{VALID_STUDY_ID}/derived/lung-highlighted"
         assert body["highlightVolumeUrl"].endswith(expected)
         assert "lung_highlighted.mha" in body["volviewUrl"]
+        assert "lung-highlighted?v=" in body["volviewUrl"]
         assert (storage / "derived" / VALID_STUDY_ID / "lung_only.mha").exists()
 
     def test_reuses_cached_volume_without_calling_orthanc(self, client, fake_orthanc):
@@ -117,6 +118,13 @@ class TestDerivedVolumes:
 
         assert response.status_code == 200
         assert response.json()["alreadyProcessed"] is True
+
+    def test_highlight_volume_disables_browser_cache(self, client, fake_orthanc):
+        client.post(SEGMENT_URL)
+
+        response = client.get(f"/studies/{VALID_STUDY_ID}/derived/lung-highlighted")
+
+        assert response.headers["cache-control"] == "no-store, max-age=0"
 
 
 class TestOrthancStudyInfo:

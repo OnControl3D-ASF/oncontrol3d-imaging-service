@@ -91,9 +91,9 @@ def segment_lungs(
         description="Si true, recalcula aunque ya exista un volumen derivado.",
     ),
     viewer_shrink: int = Query(
-        2,
+        1,
         description="Submuestreo del volumen servido al visor (no afecta la "
-        "segmentación). 1=full, 2=~8x más liviano (recomendado), 3+=agresivo.",
+        "segmentación). 1=calidad completa, 2=~8x más liviano, 3+=agresivo.",
     ),
 ):
     paths = get_storage_paths(orthanc_study_id)
@@ -203,6 +203,7 @@ def get_lung_highlighted(orthanc_study_id: StudyId):
         path=paths["highlight_path"],
         media_type="application/octet-stream",
         filename=f"{orthanc_study_id}_lung_highlighted.mha",
+        headers={"Cache-Control": "no-store, max-age=0"},
     )
 
 
@@ -231,9 +232,13 @@ def build_segmentation_response(orthanc_study_id: str, already_processed: bool):
     if paths["highlight_path"].exists():
         view_name = f"{orthanc_study_id}_lung_highlighted.mha"
         view_url = highlight_volume_url
+        view_path = paths["highlight_path"]
     else:
         view_name = f"{orthanc_study_id}_lung_only.mha"
         view_url = lung_volume_url
+        view_path = paths["lung_path"]
+
+    view_url = f"{view_url}?v={view_path.stat().st_mtime_ns}"
 
     encoded_name = urllib.parse.quote(view_name)
     encoded_url = urllib.parse.quote(view_url, safe=":/?&=%")
