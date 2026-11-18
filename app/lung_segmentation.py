@@ -209,8 +209,16 @@ def create_lung_only_volume(
     # Zonas densas dentro del pulmón (referencial).
     dense = segment_dense_regions(hu, mask, dense_threshold_hu=dense_threshold_hu)
 
-    # Volumen resaltado: pulmón normal + zonas densas empujadas a intensidad alta.
-    lung_highlighted = lung_only.copy()
+    # VolView applies CT-AAA to MHA files. Native lung HU values are nearly
+    # transparent with that preset, so map only the display volume into its
+    # visible range while preserving relative density and internal detail.
+    lung_highlighted = np.full_like(hu, fill_value=-3024, dtype=np.int16)
+    visible_lung = np.interp(
+        np.clip(hu[mask], -1000, dense_threshold_hu),
+        (-1000, dense_threshold_hu),
+        (145, 420),
+    ).astype(np.int16)
+    lung_highlighted[mask] = visible_lung
     lung_highlighted[dense] = highlight_value
 
     lung_image = sitk.GetImageFromArray(lung_only)
@@ -251,7 +259,7 @@ def save_images(
     mask_image: sitk.Image,
     output_dir: Path,
     highlight_image: sitk.Image | None = None,
-    viewer_shrink: int = 2,
+    viewer_shrink: int = 1,
 ) -> dict:
     """
     Guarda los volúmenes derivados.
@@ -261,7 +269,7 @@ def save_images(
     (la segmentación ya se hizo a resolución completa, así que la calidad de
     la máscara no cambia). Reduce enormemente el tamaño de descarga y acelera
     el render en VolView, que es referencial y no diagnóstico.
-    1 = sin submuestreo, 2 = ~8x menos vóxeles (recomendado), 3+ = más agresivo.
+    1 = resolución completa (mejor calidad), 2 = ~8x menos vóxeles, 3+ = más agresivo.
 
     Además comprime el .mha (ITK/VolView lo leen de forma transparente).
     """
