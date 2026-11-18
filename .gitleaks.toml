@@ -1,0 +1,12 @@
+# Gitleaks configuration: default rules + project-specific additions.
+
+[extend]
+useDefault = true
+
+# Settings fields named like secrets must not ship a hardcoded default value
+# (e.g. orthanc_password: str = "orthanc"); they must come from the environment.
+[[rules]]
+id = "python-settings-secret-default"
+description = "Secret-like settings field with a hardcoded string default"
+regex = '''(?im)^\s*[a-z0-9_]*(password|passwd|secret|token|api_key|private_key)[a-z0-9_]*\s*:\s*str[^=\n]*=\s*["'][^"']+["']'''
+keywords = ["password", "passwd", "secret", "token", "api_key", "private_key"]
