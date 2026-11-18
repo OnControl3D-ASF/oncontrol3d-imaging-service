@@ -117,6 +117,10 @@ jobs:
   deliver-dev:
     name: Dev
     needs: image
+    # deliver.yml logs in to Azure with OIDC; a called workflow can't exceed the caller's permissions.
+    permissions:
+      contents: read
+      id-token: write
     uses: ./.github/workflows/deliver.yml
     with:
       environment: dev
@@ -127,6 +131,10 @@ jobs:
     name: Prod
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [image, deliver-dev]
+    # deliver.yml logs in to Azure with OIDC; a called workflow can't exceed the caller's permissions.
+    permissions:
+      contents: read
+      id-token: write
     uses: ./.github/workflows/deliver.yml
     with:
       environment: prod
