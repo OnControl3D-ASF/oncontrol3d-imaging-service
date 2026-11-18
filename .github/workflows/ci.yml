@@ -2,16 +2,17 @@ name: CI
 
 on:
   push:
-    branches: [main, develop] # feature branches are verified through their PR
+    branches: [develop] # main and release tags run through cicd.yml
   pull_request:
     branches: [main, develop]
+  workflow_call: # called by cicd.yml for main and release tags
 
 permissions:
   contents: read
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }} # never cancel a delivery on main
 
 jobs:
   build-test:
@@ -60,3 +61,22 @@ jobs:
       - name: SonarCloud scan
         if: env.SONAR_TOKEN != ''
         uses: SonarSource/sonarqube-scan-action@v8
+
+  manifests:
+    name: Validate Kubernetes manifests
+    runs-on: ubuntu-latest
+    env:
+      KUBECONFORM_IMAGE: ghcr.io/yannh/kubeconform:v0.8.0@sha256:faffaf43f95aa6425306e1ab8d6fcad72acb9049158f38e574c085ea1ec0f64e
+    steps:
+      - uses: actions/checkout@v7
+
+      # Same render script as the deployment, with placeholder image values.
+      - name: Render and validate (dev, prod)
+        env:
+          IMAGE: example.azurecr.io/oncontrol3d/imaging@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          APP_VERSION: ci-validation
+        run: |
+          mkdir -p rendered
+          for env in dev prod; do deploy/render.sh "$env" > "rendered/$env.yaml"; done
+          docker run --rm -v "$PWD/rendered:/m:ro" "$KUBECONFORM_IMAGE" \
+            -strict -summary -kubernetes-version 1.33.0 /m/dev.yaml /m/prod.yaml

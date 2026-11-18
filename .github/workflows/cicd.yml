@@ -1,0 +1,134 @@
+name: CI/CD
+
+# Imaging Service delivery pipeline (docs/pipeline.md):
+#
+#   quality ─┐  ruff, pytest + coverage, manifests, SonarCloud
+#   sast ────┤  Semgrep (blocks on ERROR)
+#   sca ─────┼─▶ image ─▶ deliver dev ─▶ deliver prod
+#   secrets ─┘  gitleaks   build once, Trivy gates,   (approval)   (tags vX.Y.Z only, approval)
+#                          SBOM, artifact
+#
+#   push to main  -> image sha-<commit>          -> dev
+#   tag vX.Y.Z    -> images X.Y.Z, X.Y, sha-...  -> dev -> prod
+#
+# Path filters: documentation-only changes never trigger a delivery. The frontend lives in its own repository, so its changes never reach this pipeline.
+# (GitHub does not evaluate path filters for tag pushes: releases always run.)
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*.*.*"]
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cicd-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  quality:
+    name: Quality
+    uses: ./.github/workflows/ci.yml
+    secrets: inherit
+
+  sast:
+    name: SAST
+    uses: ./.github/workflows/sast.yml
+
+  sca:
+    name: SCA
+    uses: ./.github/workflows/sca.yml
+
+  secrets:
+    name: Secrets
+    uses: ./.github/workflows/secrets.yml
+
+  image:
+    name: Build & scan image
+    needs: [quality, sast, sca, secrets]
+    runs-on: ubuntu-latest
+    env:
+      TRIVY_IMAGE: aquasec/trivy@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c
+    outputs:
+      tags: ${{ steps.version.outputs.tags }}
+      app-version: ${{ steps.version.outputs.app_version }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Compute version and tags
+        id: version
+        run: |
+          sha_tag="sha-${GITHUB_SHA::7}"
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            version="${GITHUB_REF_NAME#v}"
+            if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::Tag $GITHUB_REF_NAME is not SemVer (vMAJOR.MINOR.PATCH)."
+              exit 1
+            fi
+            echo "tags=$version ${version%.*} $sha_tag" >> "$GITHUB_OUTPUT"
+            echo "app_version=$version" >> "$GITHUB_OUTPUT"
+          else
+            echo "tags=$sha_tag" >> "$GITHUB_OUTPUT"
+            echo "app_version=$sha_tag" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build image
+        run: |
+          docker build --pull \
+            --label "org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}" \
+            --label "org.opencontainers.image.revision=${{ github.sha }}" \
+            --label "org.opencontainers.image.version=${{ steps.version.outputs.app_version }}" \
+            -t imaging:ci .
+          docker save -o imaging-image.tar imaging:ci
+
+      # Same blocking policy as container.yml (docs/seguridad-hallazgos.md), applied to the
+      # exact image that will be delivered.
+      - name: Fail on CRITICAL vulnerabilities
+        run: >
+          docker run --rm -v "$GITHUB_WORKSPACE:/src" -v trivy-cache:/root/.cache -w /src "$TRIVY_IMAGE"
+          image --input imaging-image.tar --scanners vuln --severity CRITICAL --exit-code 1
+
+      - name: Fail on fixable HIGH vulnerabilities
+        run: >
+          docker run --rm -v "$GITHUB_WORKSPACE:/src" -v trivy-cache:/root/.cache -w /src "$TRIVY_IMAGE"
+          image --input imaging-image.tar --scanners vuln --severity HIGH --ignore-unfixed --exit-code 1
+
+      - name: SBOM (CycloneDX)
+        run: >
+          docker run --rm -v "$GITHUB_WORKSPACE:/src" -v trivy-cache:/root/.cache -w /src "$TRIVY_IMAGE"
+          image --input imaging-image.tar --format cyclonedx --output sbom.cdx.json
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: imaging-image
+          path: imaging-image.tar
+          retention-days: 7
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: imaging-sbom
+          path: sbom.cdx.json
+
+  deliver-dev:
+    name: Dev
+    needs: image
+    uses: ./.github/workflows/deliver.yml
+    with:
+      environment: dev
+      image-tags: ${{ needs.image.outputs.tags }}
+      app-version: ${{ needs.image.outputs.app-version }}
+
+  deliver-prod:
+    name: Prod
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [image, deliver-dev]
+    uses: ./.github/workflows/deliver.yml
+    with:
+      environment: prod
+      image-tags: ${{ needs.image.outputs.tags }}
+      app-version: ${{ needs.image.outputs.app-version }}

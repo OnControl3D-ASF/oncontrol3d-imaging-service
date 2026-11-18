@@ -1,0 +1,141 @@
+# Imaging Service on AKS (namespace "oncontrol", Pod Security "restricted").
+#
+# Template rendered by the CI/CD pipeline (deploy/render.sh) with an explicit variable list:
+#   NAMESPACE, IMAGE (registry/repo@sha256:digest), APP_VERSION, REPLICAS,
+#   CPU_REQUEST, CPU_LIMIT, MEMORY_REQUEST, MEMORY_LIMIT, STORAGE_SIZE,
+#   PUBLIC_BASE_URL, VOLVIEW_URL, CORS_ALLOWED_ORIGINS
+#
+# No Azure identity is needed: the service reads no Key Vault secret (Orthanc credentials are
+# optional and absent in this deployment), so the pod gets no Kubernetes or Azure token.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: imaging
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/name: imaging
+    app.kubernetes.io/part-of: oncontrol3d
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: imaging
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/name: imaging
+    app.kubernetes.io/part-of: oncontrol3d
+    app.kubernetes.io/version: "${APP_VERSION}"
+spec:
+  replicas: ${REPLICAS}
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: imaging
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: imaging
+        app.kubernetes.io/part-of: oncontrol3d
+        app.kubernetes.io/version: "${APP_VERSION}"
+    spec:
+      serviceAccountName: imaging
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: imaging
+          image: ${IMAGE}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8001
+          env:
+            - name: PORT
+              value: "8001"
+            - name: STORAGE_DIR
+              value: /app/storage
+            - name: ORTHANC_URL
+              value: "http://orthanc.${NAMESPACE}.svc.cluster.local:8042"
+            - name: PUBLIC_BASE_URL
+              value: "${PUBLIC_BASE_URL}"
+            - name: VOLVIEW_URL
+              value: "${VOLVIEW_URL}"
+            - name: CORS_ALLOWED_ORIGINS
+              value: "${CORS_ALLOWED_ORIGINS}"
+          resources:
+            requests:
+              cpu: "${CPU_REQUEST}"
+              memory: "${MEMORY_REQUEST}"
+            limits:
+              cpu: "${CPU_LIMIT}"
+              memory: "${MEMORY_LIMIT}"
+          # scipy / scikit-image / SimpleITK imports take a few seconds on a small node.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 24
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 20
+            # Lung segmentation is CPU-heavy: give /health room before restarting the pod.
+            timeoutSeconds: 10
+            failureThreshold: 6
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: storage
+              mountPath: /app/storage
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 1Gi
+        # Raw and derived volumes are regenerable from Orthanc: ephemeral storage avoids paying
+        # for a managed disk. Moving to a PVC is a one-line change if persistence is needed.
+        - name: storage
+          emptyDir:
+            sizeLimit: ${STORAGE_SIZE}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: imaging
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/name: imaging
+    app.kubernetes.io/part-of: oncontrol3d
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: imaging
+  ports:
+    - name: http
+      port: 8001
+      targetPort: http

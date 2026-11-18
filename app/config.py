@@ -11,6 +11,11 @@ class Settings(BaseSettings):
 
     storage_dir: str = "storage"
 
+    # Comma-separated browser origins allowed by CORS (env: CORS_ALLOWED_ORIGINS).
+    # "*" keeps local development working; in deployed environments set the
+    # VolView/Orthanc origin(s) that download the derived volumes.
+    cors_allowed_origins: str = "*"
+
     class Config:
         env_file = ".env"
 
