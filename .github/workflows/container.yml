@@ -2,7 +2,7 @@ name: Container scan
 
 on:
   push:
-    branches: [main, develop]
+    branches: [develop]
   pull_request:
     branches: [main, develop]
   schedule:
@@ -17,6 +17,7 @@ env:
 
 jobs:
   trivy:
+    name: Image scan (Trivy)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

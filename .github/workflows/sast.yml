@@ -1,16 +1,16 @@
 name: SAST
 
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
+  workflow_call: # called by cicd.yml for main and release tags
 
 permissions:
   contents: read
 
 jobs:
   semgrep:
+    name: SAST (Semgrep)
     runs-on: ubuntu-latest
     container:
       image: semgrep/semgrep@sha256:c8f333ab0ad103d2bcd3b55cbeabcfc556bfeaa7446ba18594a4320f3807ffc9
