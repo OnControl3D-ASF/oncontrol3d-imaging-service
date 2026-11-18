@@ -2,7 +2,7 @@ name: Container scan
 
 on:
   push:
-    branches: [main, develop]
+    branches: [develop]
   pull_request:
     branches: [main, develop]
   schedule:
@@ -17,6 +17,7 @@ env:
 
 jobs:
   trivy:
+    name: Image scan (Trivy)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -42,14 +43,24 @@ jobs:
           name: trivy-image-report
           path: trivy-image.json
 
-      - name: Fail on fixable HIGH or CRITICAL vulnerabilities
+      # Blocking policy: ANY CRITICAL blocks (fixed or not); HIGH blocks when a fix exists.
+      - name: Fail on CRITICAL vulnerabilities
         run: >
           docker run --rm
           -v "$GITHUB_WORKSPACE:/src"
           -v trivy-cache:/root/.cache
           -w /src
           "$TRIVY_IMAGE"
-          image --input image.tar --scanners vuln --offline-scan --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1
+          image --input image.tar --scanners vuln --offline-scan --severity CRITICAL --exit-code 1
+
+      - name: Fail on fixable HIGH vulnerabilities
+        run: >
+          docker run --rm
+          -v "$GITHUB_WORKSPACE:/src"
+          -v trivy-cache:/root/.cache
+          -w /src
+          "$TRIVY_IMAGE"
+          image --input image.tar --scanners vuln --offline-scan --severity HIGH --ignore-unfixed --exit-code 1
 
       - name: Fail on HIGH or CRITICAL Dockerfile issues
         run: >
