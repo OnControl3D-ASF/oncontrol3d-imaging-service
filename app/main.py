@@ -23,13 +23,26 @@ app = FastAPI(
     description="Microservicio para procesamiento y segmentación pulmonar de tomografías.",
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Solo desarrollo. En producción restringir.
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+def cors_options(allowed_origins: str) -> dict:
+    """CORS settings derived from CORS_ALLOWED_ORIGINS.
+
+    Credentials are only allowed for an explicit origin list: combining a
+    wildcard with credentials makes Starlette reflect ANY caller's Origin,
+    letting every website send credentialed requests. No client of this
+    service sends credentials (the frontend goes through the clinical
+    backend and VolView downloads volumes with plain GETs).
+    """
+    origins = [o.strip() for o in allowed_origins.split(",") if o.strip()] or ["*"]
+    wildcard = "*" in origins
+    return {
+        "allow_origins": ["*"] if wildcard else origins,
+        "allow_credentials": not wildcard,
+        "allow_methods": ["GET", "POST", "OPTIONS"],
+        "allow_headers": ["*"],
+    }
+
+
+app.add_middleware(CORSMiddleware, **cors_options(settings.cors_allowed_origins))
 
 
 # Orthanc study IDs are SHA-1 based: five groups of 8 hex chars joined by "-".
