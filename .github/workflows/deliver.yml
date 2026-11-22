@@ -114,16 +114,20 @@ jobs:
           APP_VERSION: ${{ inputs.app-version }}
         run: |
           deploy/render.sh "${{ inputs.environment }}" > rendered.yaml
+          # The target namespace lives in the env file (dev: oncontrol, prod: oncontrol-prod).
+          ns=$(sed -n 's/^NAMESPACE=//p' "deploy/env/${{ inputs.environment }}.env")
+          test -n "$ns"
+          echo "NAMESPACE=$ns" >> "$GITHUB_ENV"
           kubectl apply -f rendered.yaml
 
       - name: Wait for rollout (readiness probes)
         if: steps.infra.outputs.ready == 'true'
-        run: kubectl -n oncontrol rollout status "deployment/$DEPLOYMENT" --timeout=420s
+        run: kubectl -n "$NAMESPACE" rollout status "deployment/$DEPLOYMENT" --timeout=420s
 
       - name: Smoke test
         if: steps.infra.outputs.ready == 'true'
         run: |
-          body=$(kubectl -n oncontrol exec "deploy/$DEPLOYMENT" -- python -c \
+          body=$(kubectl -n "$NAMESPACE" exec "deploy/$DEPLOYMENT" -- python -c \
             "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=5).read().decode())")
           echo "health: $body"
           echo "$body" | grep -q '"status":"ok"'
@@ -132,8 +136,8 @@ jobs:
         if: failure() && steps.apply.outcome == 'success'
         run: |
           echo "::error::Delivery to ${{ inputs.environment }} failed: rolling back to the previous revision."
-          kubectl -n oncontrol rollout undo "deployment/$DEPLOYMENT"
-          kubectl -n oncontrol rollout status "deployment/$DEPLOYMENT" --timeout=300s || true
+          kubectl -n "$NAMESPACE" rollout undo "deployment/$DEPLOYMENT"
+          kubectl -n "$NAMESPACE" rollout status "deployment/$DEPLOYMENT" --timeout=300s || true
 
       - name: Delivery summary
         if: steps.infra.outputs.ready == 'true'
@@ -144,7 +148,7 @@ jobs:
             echo "- Image: \`${{ steps.push.outputs.image }}\`"
             echo "- Tags: \`${{ inputs.image-tags }}\`"
             echo "- Pods:"
-            kubectl -n oncontrol get pods -l "app.kubernetes.io/name=$DEPLOYMENT" \
+            kubectl -n "$NAMESPACE" get pods -l "app.kubernetes.io/name=$DEPLOYMENT" \
               -o custom-columns=NAME:.metadata.name,READY:.status.containerStatuses[0].ready,IMAGE:.spec.containers[0].image --no-headers \
               | sed 's/^/  - /'
           } >> "$GITHUB_STEP_SUMMARY"

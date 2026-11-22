@@ -1,9 +1,13 @@
 # Imaging Service on AKS (namespace "oncontrol", Pod Security "restricted").
 #
 # Template rendered by the CI/CD pipeline (deploy/render.sh) with an explicit variable list:
-#   NAMESPACE, IMAGE (registry/repo@sha256:digest), APP_VERSION, REPLICAS,
+#   NAMESPACE, IMAGE (registry/repo@sha256:digest), APP_VERSION, MIN_REPLICAS, MAX_REPLICAS,
 #   CPU_REQUEST, CPU_LIMIT, MEMORY_REQUEST, MEMORY_LIMIT, STORAGE_SIZE,
-#   PUBLIC_BASE_URL, VOLVIEW_URL, CORS_ALLOWED_ORIGINS
+#   PUBLIC_BASE_URL, VOLVIEW_URL
+#
+# CORS_ALLOWED_ORIGINS is NOT a render variable: the container reads it from the optional
+# `edge` ConfigMap (key PUBLIC_ORIGIN, owned by oncontrol3d-infra). If the edge is not
+# applied yet the pod still starts and the application default applies.
 #
 # No Azure identity is needed: the service reads no Key Vault secret (Orthanc credentials are
 # optional and absent in this deployment), so the pod gets no Kubernetes or Azure token.
@@ -18,6 +22,21 @@ metadata:
     app.kubernetes.io/part-of: oncontrol3d
 automountServiceAccountToken: false
 ---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: imaging-config
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/name: imaging
+    app.kubernetes.io/part-of: oncontrol3d
+data:
+  PORT: "8001"
+  STORAGE_DIR: /app/storage
+  ORTHANC_URL: "http://orthanc.${NAMESPACE}.svc.cluster.local:8042"
+  PUBLIC_BASE_URL: "${PUBLIC_BASE_URL}"
+  VOLVIEW_URL: "${VOLVIEW_URL}"
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -28,7 +47,7 @@ metadata:
     app.kubernetes.io/part-of: oncontrol3d
     app.kubernetes.io/version: "${APP_VERSION}"
 spec:
-  replicas: ${REPLICAS}
+  # No `replicas`: the HorizontalPodAutoscaler owns the count (a re-apply must not reset it).
   revisionHistoryLimit: 5
   selector:
     matchLabels:
@@ -52,6 +71,7 @@ spec:
         runAsUser: 10001
         runAsGroup: 10001
         fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -61,19 +81,16 @@ spec:
           ports:
             - name: http
               containerPort: 8001
+          envFrom:
+            - configMapRef:
+                name: imaging-config
           env:
-            - name: PORT
-              value: "8001"
-            - name: STORAGE_DIR
-              value: /app/storage
-            - name: ORTHANC_URL
-              value: "http://orthanc.${NAMESPACE}.svc.cluster.local:8042"
-            - name: PUBLIC_BASE_URL
-              value: "${PUBLIC_BASE_URL}"
-            - name: VOLVIEW_URL
-              value: "${VOLVIEW_URL}"
             - name: CORS_ALLOWED_ORIGINS
-              value: "${CORS_ALLOWED_ORIGINS}"
+              valueFrom:
+                configMapKeyRef:
+                  name: edge
+                  key: PUBLIC_ORIGIN
+                  optional: true
           resources:
             requests:
               cpu: "${CPU_REQUEST}"
@@ -139,3 +156,78 @@ spec:
     - name: http
       port: 8001
       targetPort: http
+---
+# Single replica on purpose: raw and derived volumes live in a per-pod emptyDir, so a second
+# replica would not see the first one's files. The HPA exists to keep the same scaling
+# contract as the other workloads and to make raising the limit a one-line change.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: imaging
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/name: imaging
+    app.kubernetes.io/part-of: oncontrol3d
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: imaging
+  minReplicas: ${MIN_REPLICAS}
+  maxReplicas: ${MAX_REPLICAS}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+---
+# L4 isolation of the imaging pods. Path restrictions (GET + derived allowlist) are enforced
+# by the Traefik routing in oncontrol3d-infra, not here.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: imaging
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/name: imaging
+    app.kubernetes.io/part-of: oncontrol3d
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: imaging
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: traefik
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: clinical
+      ports:
+        - protocol: TCP
+          port: 8001
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: orthanc
+      ports:
+        - protocol: TCP
+          port: 8042
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53

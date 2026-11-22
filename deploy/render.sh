@@ -5,6 +5,7 @@
 #
 # Sizing and URLs come from deploy/env/<env>.env; the pipeline exports IMAGE and APP_VERSION.
 # Only the listed variables are substituted, and every one of them must be set.
+# CORS origin is deliberately absent: it is read from the optional `edge` ConfigMap.
 set -euo pipefail
 
 ENVIRONMENT="${1:?usage: deploy/render.sh <dev|prod>}"
@@ -15,8 +16,8 @@ set -a
 . "$DIR/env/$ENVIRONMENT.env"
 set +a
 
-REQUIRED=(NAMESPACE IMAGE APP_VERSION REPLICAS CPU_REQUEST CPU_LIMIT MEMORY_REQUEST MEMORY_LIMIT
-          STORAGE_SIZE PUBLIC_BASE_URL VOLVIEW_URL CORS_ALLOWED_ORIGINS)
+REQUIRED=(NAMESPACE IMAGE APP_VERSION MIN_REPLICAS MAX_REPLICAS CPU_REQUEST CPU_LIMIT MEMORY_REQUEST MEMORY_LIMIT
+          STORAGE_SIZE PUBLIC_BASE_URL VOLVIEW_URL)
 for name in "${REQUIRED[@]}"; do
   if [ -z "${!name:-}" ]; then
     echo "render.sh: required variable $name is empty" >&2
