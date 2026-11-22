@@ -59,3 +59,25 @@ def test_rendered_cors_comes_from_optional_edge_configmap(environment):
         rendered,
     )
     assert block is not None
+
+
+@pytest.mark.parametrize("environment", ENVIRONMENTS)
+def test_render_ships_hpa_capped_at_one_replica_and_no_fixed_replicas(environment):
+    rendered = render(environment).stdout
+
+    assert "kind: HorizontalPodAutoscaler" in rendered
+    assert re.search(r"maxReplicas: 1\b", rendered)
+    assert not re.search(r"^\s+replicas:", rendered, re.MULTILINE)
+
+
+@pytest.mark.parametrize("environment", ENVIRONMENTS)
+def test_render_ships_networkpolicy_and_fsgroup_policy(environment):
+    rendered = render(environment).stdout
+
+    assert "kind: NetworkPolicy" in rendered
+    assert "fsGroupChangePolicy: OnRootMismatch" in rendered
+
+
+def test_prod_targets_its_own_namespace():
+    assert "namespace: oncontrol-prod" in render("prod").stdout
+    assert "namespace: oncontrol-prod" not in render("dev").stdout
